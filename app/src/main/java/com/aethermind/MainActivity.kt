@@ -17,23 +17,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.aethermind.core.AetherRuntime
+import com.aethermind.core.AetherForegroundService
 
 class MainActivity : ComponentActivity() {
     
-    companion object {
-        // กำหนดเป้าหมายเป็นเกม 8 Ball Pool
-        const val TARGET_PACKAGE = "com.miniclip.eightballpool"
-    }
+    companion object { const val TARGET_PACKAGE = "com.miniclip.eightballpool" }
 
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            // 1. เริ่มระบบบอท (จับภาพ + คำนวณ)
-            AetherRuntime.start(this, 1080, 1920, result.data!!)
+            // ส่งข้อมูลไปที่ Foreground Service เพื่อเริ่มจับภาพ
+            val serviceIntent = Intent(this, AetherForegroundService::class.java).apply {
+                putExtra("RESULT_CODE", result.resultCode)
+                putExtra("DATA", result.data)
+            }
+            startForegroundService(serviceIntent)
             
-            // 2. เปิดเกม 8 Ball Pool อัตโนมัติทันที
+            // เปิดเกม
             launchGame()
         }
     }
@@ -49,7 +50,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Text("AetherMind V2", style = MaterialTheme.typography.headlineLarge)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("Target: 8 Ball Pool", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    Text("Target: 8 Ball Pool", color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(24.dp))
                     
                     Button(onClick = { requestOverlayPermission() }, modifier = Modifier.fillMaxWidth()) {
@@ -64,46 +65,29 @@ class MainActivity : ComponentActivity() {
 
                     Button(
                         onClick = { 
-                            // ตรวจสอบก่อนว่าติดตั้งเกมไว้ไหม
-                            if (isGameInstalled()) {
-                                requestScreenCapture()
-                            } else {
-                                Toast.makeText(this@MainActivity, "กรุณาติดตั้ง 8 Ball Pool ก่อน", Toast.LENGTH_SHORT).show()
-                            }
+                            if (isGameInstalled()) requestScreenCapture() 
+                            else Toast.makeText(this@MainActivity, "กรุณาติดตั้ง 8 Ball Pool", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("START AETHER BOT & GAME")
-                    }
+                    ) { Text("START AETHER BOT & GAME") }
                 }
             }
         }
     }
 
     private fun requestOverlayPermission() {
-        if (!Settings.canDrawOverlays(this)) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        }
+        if (!Settings.canDrawOverlays(this)) startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
     }
 
-    private fun openAccessibilitySettings() {
-        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-    }
+    private fun openAccessibilitySettings() { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
 
     private fun requestScreenCapture() {
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
-    private fun isGameInstalled(): Boolean {
-        return try {
-            packageManager.getPackageInfo(TARGET_PACKAGE, 0)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    private fun isGameInstalled(): Boolean = try { packageManager.getPackageInfo(TARGET_PACKAGE, 0); true } catch (e: Exception) { false }
 
     private fun launchGame() {
         val intent = packageManager.getLaunchIntentForPackage(TARGET_PACKAGE)
