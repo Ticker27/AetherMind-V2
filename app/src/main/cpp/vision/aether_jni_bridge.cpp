@@ -27,16 +27,19 @@ Java_com_aethermind_vision_AetherNativeBridge_nativeGetCommand(JNIEnv* env, jobj
     if (!g_engine) return nullptr;
 
     AetherCommand cmd = g_engine->getLatestCommand();
+    bool hasShot = cmd.hasShot.load();
+    if (!hasShot) return nullptr;
+
     jfloatArray result = env->NewFloatArray(6);
     if (result) {
         float data[6] = {
-            cmd.hasShot ? 1.0f : 0.0f,
+            1.0f,
             cmd.startX, cmd.startY,
             cmd.endX, cmd.endY,
             (float)cmd.durationMs
         };
         env->SetFloatArrayRegion(result, 0, 6, data);
-        cmd.hasShot = false; // Reset หลังส่งคำสั่ง
+        cmd.hasShot.store(false);
     }
     return result;
 }
