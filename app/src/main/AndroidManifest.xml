@@ -10,7 +10,7 @@
         android:label="AetherMind V2"
         android:roundIcon="@android:drawable/ic_menu_camera"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceBase.Light">
+        android:theme="@android:style/Theme.DeviceDefault.Light">
         
         <activity
             android:name=".MainActivity"
