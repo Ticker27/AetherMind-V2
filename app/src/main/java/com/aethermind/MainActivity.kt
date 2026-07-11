@@ -1,11 +1,16 @@
 package com.aethermind
 
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -15,6 +20,24 @@ import androidx.compose.ui.unit.dp
 import com.aethermind.core.AetherRuntime
 
 class MainActivity : ComponentActivity() {
+    
+    companion object {
+        // กำหนดเป้าหมายเป็นเกม 8 Ball Pool
+        const val TARGET_PACKAGE = "com.miniclip.eightballpool"
+    }
+
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            // 1. เริ่มระบบบอท (จับภาพ + คำนวณ)
+            AetherRuntime.start(this, 1080, 1920, result.data!!)
+            
+            // 2. เปิดเกม 8 Ball Pool อัตโนมัติทันที
+            launchGame()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -25,6 +48,8 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.Center
                 ) {
                     Text("AetherMind V2", style = MaterialTheme.typography.headlineLarge)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Target: 8 Ball Pool", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(24.dp))
                     
                     Button(onClick = { requestOverlayPermission() }, modifier = Modifier.fillMaxWidth()) {
@@ -39,13 +64,17 @@ class MainActivity : ComponentActivity() {
 
                     Button(
                         onClick = { 
-                            // เริ่มการทำงานของบอท (เป้าหมายหลัก)
-                            AetherRuntime.start(1080, 1920) 
+                            // ตรวจสอบก่อนว่าติดตั้งเกมไว้ไหม
+                            if (isGameInstalled()) {
+                                requestScreenCapture()
+                            } else {
+                                Toast.makeText(this@MainActivity, "กรุณาติดตั้ง 8 Ball Pool ก่อน", Toast.LENGTH_SHORT).show()
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text("START AETHER BOT")
+                        Text("START AETHER BOT & GAME")
                     }
                 }
             }
@@ -60,5 +89,25 @@ class MainActivity : ComponentActivity() {
 
     private fun openAccessibilitySettings() {
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun requestScreenCapture() {
+        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+    }
+
+    private fun isGameInstalled(): Boolean {
+        return try {
+            packageManager.getPackageInfo(TARGET_PACKAGE, 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun launchGame() {
+        val intent = packageManager.getLaunchIntentForPackage(TARGET_PACKAGE)
+        intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
     }
 }
