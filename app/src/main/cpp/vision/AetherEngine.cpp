@@ -46,5 +46,7 @@ void AetherEngine::processFrame(uint8_t* pixels, int width, int height) {
 }
 
 AetherCommand AetherEngine::getLatestCommand() {
-    return currentCommand;
+    AetherCommand snapshot = currentCommand;
+    currentCommand.hasShot = false; // รีเซ็ตธงที่เครื่อง (กันยิงซ้ำไม่หยุด)
+    return snapshot;
 }

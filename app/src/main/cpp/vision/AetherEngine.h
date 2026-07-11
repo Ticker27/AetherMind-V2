@@ -3,7 +3,7 @@
 #include <atomic>
 
 struct AetherCommand {
-    std::atomic<bool> hasShot;
+    bool hasShot;
     float startX;
     float startY;
     float endX;
