@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -27,43 +28,60 @@ import java.nio.ByteBuffer
 
 class AetherForegroundService : Service() {
 
-    private val scope = CoroutineScope(Dispatchers.Default)
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var windowManager: WindowManager? = null
     private var overlayView: TextView? = null
-    
+    private var captureJob: Job? = null
+    private var execJob: Job? = null
+
     private val screenWidth = 1080
     private val screenHeight = 1920
     private val pixelBuffer = ByteBuffer.allocateDirect(screenWidth * screenHeight * 4)
+    private var isProcessing = false
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         showOverlayIndicator()
+        Log.d("AetherFG", "Service Created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, createNotification())
 
-        if (intent != null && intent.hasExtra("RESULT_CODE")) {
+        if (intent != null && intent.hasExtra("RESULT_CODE") && projection == null) {
             val resultCode = intent.getIntExtra("RESULT_CODE", 0)
             val data = intent.getParcelableExtra<Intent>("DATA")
             
             if (data != null) {
-                AetherNativeBridge.initEngine(screenWidth, screenHeight)
-                startScreenCapture(resultCode, data)
-                startExecutionLoop()
+                try {
+                    AetherNativeBridge.initEngine(screenWidth, screenHeight)
+                    startScreenCapture(resultCode, data)
+                    startExecutionLoop()
+                    updateOverlayStatus("⚡ AETHER: SCANNING...")
+                } catch (e: Exception) {
+                    Log.e("AetherFG", "Init Failed", e)
+                    updateOverlayStatus("❌ AETHER: ERROR")
+                }
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun startScreenCapture(resultCode: Int, data: Intent) {
         try {
             val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             projection = projectionManager.getMediaProjection(resultCode, data)
+            
+            projection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    Log.d("AetherFG", "Projection Stopped")
+                    cleanup()
+                }
+            }, null)
             
             imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
             virtualDisplay = projection?.createVirtualDisplay(
@@ -73,7 +91,10 @@ class AetherForegroundService : Service() {
             )
             
             imageReader?.setOnImageAvailableListener({ reader ->
+                if (isProcessing) return@setOnImageAvailableListener
                 val image = reader?.acquireLatestImage() ?: return@setOnImageAvailableListener
+                
+                isProcessing = true
                 try {
                     val plane = image.planes[0]
                     val buffer = plane.buffer
@@ -93,26 +114,38 @@ class AetherForegroundService : Service() {
                     Log.e("AetherFG", "Capture Error", e)
                 } finally {
                     image.close()
+                    isProcessing = false
                 }
             }, null)
             
+            Log.d("AetherFG", "Screen Capture Started Successfully")
+        } catch (e: SecurityException) {
+            Log.e("AetherFG", "Security Exception", e)
+            updateOverlayStatus("❌ AETHER: PERMISSION DENIED")
         } catch (e: Exception) {
             Log.e("AetherFG", "ScreenCapture Failed", e)
         }
     }
 
     private fun startExecutionLoop() {
-        scope.launch {
+        execJob?.cancel()
+        execJob = scope.launch {
             while (isActive) {
-                val cmd = AetherNativeBridge.checkForShotCommand()
-                if (cmd != null) {
-                    val accService = AetherAccessibilityService.instance
-                    if (accService != null) {
-                        withContext(Dispatchers.Main) {
-                            accService.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt())
+                try {
+                    val cmd = AetherNativeBridge.checkForShotCommand()
+                    if (cmd != null) {
+                        updateOverlayStatus("🎯 AETHER: SHOOTING!")
+                        val accService = AetherAccessibilityService.instance
+                        if (accService != null) {
+                            withContext(Dispatchers.Main) {
+                                accService.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt())
+                            }
+                            delay(3000)
+                            updateOverlayStatus("⚡ AETHER: SCANNING...")
                         }
-                        delay(2000)
                     }
+                } catch (e: Exception) {
+                    Log.e("AetherFG", "Exec Loop Error", e)
                 }
                 delay(16)
             }
@@ -122,21 +155,37 @@ class AetherForegroundService : Service() {
     private fun showOverlayIndicator() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         overlayView = TextView(this).apply {
-            text = "⚡ AETHER ENGINE RUNNING..."
-            setBackgroundColor(0xCC000000.toInt())
+            text = "⚡ AETHER: STARTING..."
+            setBackgroundColor(0x99000000.toInt())
             setTextColor(0xFF00FF00.toInt())
-            textSize = 14f
-            setPadding(20, 10, 20, 10)
+            textSize = 10f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(10, 5, 10, 5)
         }
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = 100 }
-        
-        windowManager?.addView(overlayView, params)
+        ).apply { 
+            gravity = Gravity.TOP or Gravity.START
+            x = 10
+            y = 10
+        }
+        try {
+            windowManager?.addView(overlayView, params)
+        } catch (e: Exception) {
+            Log.e("AetherFG", "Overlay Failed", e)
+        }
+    }
+
+    private fun updateOverlayStatus(status: String) {
+        scope.launch(Dispatchers.Main) {
+            try {
+                overlayView?.text = status
+            } catch (e: Exception) {}
+        }
     }
 
     private fun createNotification(): Notification {
@@ -144,6 +193,7 @@ class AetherForegroundService : Service() {
             .setContentTitle("AetherMind V2")
             .setContentText("Bot is running...")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setOngoing(true)
             .build()
     }
 
@@ -155,13 +205,23 @@ class AetherForegroundService : Service() {
         }
     }
 
+    private fun cleanup() {
+        try {
+            virtualDisplay?.release()
+            imageReader?.close()
+            projection?.stop()
+        } catch (e: Exception) {}
+        virtualDisplay = null
+        imageReader = null
+        projection = null
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
-        virtualDisplay?.release()
-        imageReader?.close()
-        projection?.stop()
-        windowManager?.removeView(overlayView)
+        cleanup()
+        try { windowManager?.removeView(overlayView) } catch (e: Exception) {}
+        overlayView = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

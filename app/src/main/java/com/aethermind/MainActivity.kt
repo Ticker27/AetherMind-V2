@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.aethermind.core.AetherAccessibilityService
 import com.aethermind.core.AetherForegroundService
 
 class MainActivity : ComponentActivity() {
@@ -27,15 +28,25 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            // ส่งข้อมูลไปที่ Foreground Service เพื่อเริ่มจับภาพ
             val serviceIntent = Intent(this, AetherForegroundService::class.java).apply {
                 putExtra("RESULT_CODE", result.resultCode)
                 putExtra("DATA", result.data)
             }
-            startForegroundService(serviceIntent)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
             
-            // เปิดเกม
-            launchGame()
+            Toast.makeText(this, "บอทเริ่มทำงานแล้ว! กำลังเปิดเกม...", Toast.LENGTH_SHORT).show()
+            
+            // หน่วงเวลา 1 วินาทีก่อนเปิดเกม (ให้ Service เริ่มทำงานก่อน)
+            Thread {
+                Thread.sleep(1000)
+                launchGame()
+            }.start()
+        } else {
+            Toast.makeText(this, "ยกเลิกการจับภาพหน้าจอ", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -64,10 +75,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(modifier = Modifier.height(24.dp))
 
                     Button(
-                        onClick = { 
-                            if (isGameInstalled()) requestScreenCapture() 
-                            else Toast.makeText(this@MainActivity, "กรุณาติดตั้ง 8 Ball Pool", Toast.LENGTH_SHORT).show()
-                        },
+                        onClick = { checkPermissionsAndStart() },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) { Text("START AETHER BOT & GAME") }
@@ -76,8 +84,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkPermissionsAndStart() {
+        // 1. เช็ค Overlay Permission
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "กรุณาเปิดสิทธิ์ Overlay ก่อน (ปุ่มที่ 1)", Toast.LENGTH_SHORT).show()
+            requestOverlayPermission()
+            return
+        }
+        
+        // 2. เช็ค Accessibility Permission
+        if (AetherAccessibilityService.instance == null) {
+            Toast.makeText(this, "กรุณาเปิดสิทธิ์ Accessibility ก่อน (ปุ่มที่ 2)", Toast.LENGTH_SHORT).show()
+            openAccessibilitySettings()
+            return
+        }
+        
+        // 3. เช็คว่าเกมติดตั้งไว้ไหม
+        if (!isGameInstalled()) {
+            Toast.makeText(this, "กรุณาติดตั้ง 8 Ball Pool ก่อน", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        // 4. ทุกอย่างพร้อม ขอจับภาพหน้าจอ
+        requestScreenCapture()
+    }
+
     private fun requestOverlayPermission() {
-        if (!Settings.canDrawOverlays(this)) startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
     }
 
     private fun openAccessibilitySettings() { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
