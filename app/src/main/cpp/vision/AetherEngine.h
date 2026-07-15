@@ -16,12 +16,23 @@ struct AetherCommand {
 struct BallInfo { float x, y; bool isCue, isTarget; };
 struct Pocket { float x, y; };
 
+// Debug state sent back to Kotlin
+struct DebugInfo {
+    bool foundCue;
+    bool foundTarget;
+    float cueX, cueY;
+    float targetX, targetY;
+    int bestPocket;
+    int frameCount;
+};
+
 class AetherEngine {
 private:
     uint8_t* binaryBuffer;
     int screenWidth, screenHeight;
     AetherCommand currentCommand;
     Pocket pockets[6];
+    DebugInfo debugInfo;
     void detectBalls(uint8_t* pixels, int width, int height, BallInfo& outCue, BallInfo& outTarget, bool& foundCue, bool& foundTarget);
     void calculateGhostBallShot(float cueX, float cueY, float targetX, float targetY, float pocketX, float pocketY);
 public:
@@ -29,4 +40,5 @@ public:
     ~AetherEngine();
     void processFrame(uint8_t* screenPixels, int width, int height);
     AetherCommand getLatestCommand();
+    DebugInfo getDebugInfo();
 };

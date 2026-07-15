@@ -26,4 +26,21 @@ JNIEXPORT jfloatArray JNICALL Java_com_aethermind_vision_AetherNativeBridge_nati
     }
     return result;
 }
+JNIEXPORT jfloatArray JNICALL Java_com_aethermind_vision_AetherNativeBridge_nativeGetDebugInfo(JNIEnv* env, jobject thiz) {
+    if (!g_engine) return nullptr;
+    DebugInfo dbg = g_engine->getDebugInfo();
+    jfloatArray result = env->NewFloatArray(8);
+    if (result) {
+        float data[8] = {
+            dbg.foundCue ? 1.0f : 0.0f,
+            dbg.foundTarget ? 1.0f : 0.0f,
+            dbg.cueX, dbg.cueY,
+            dbg.targetX, dbg.targetY,
+            (float)dbg.bestPocket,
+            (float)dbg.frameCount
+        };
+        env->SetFloatArrayRegion(result, 0, 8, data);
+    }
+    return result;
+}
 }

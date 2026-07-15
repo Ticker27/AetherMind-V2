@@ -5,6 +5,12 @@
 AetherEngine::AetherEngine(int width, int height) : screenWidth(width), screenHeight(height) {
     binaryBuffer = new uint8_t[width * height]();
     currentCommand.hasShot = false;
+    debugInfo.foundCue = false;
+    debugInfo.foundTarget = false;
+    debugInfo.cueX = 0; debugInfo.cueY = 0;
+    debugInfo.targetX = 0; debugInfo.targetY = 0;
+    debugInfo.bestPocket = -1;
+    debugInfo.frameCount = 0;
     float pocketCoords[6][2] = { {0.05f, 0.10f}, {0.50f, 0.08f}, {0.95f, 0.10f}, {0.05f, 0.85f}, {0.50f, 0.88f}, {0.95f, 0.85f} };
     for(int i=0; i<6; ++i) { pockets[i].x = pocketCoords[i][0] * width; pockets[i].y = pocketCoords[i][1] * height; }
 }
@@ -44,8 +50,17 @@ void AetherEngine::calculateGhostBallShot(float cueX, float cueY, float targetX,
 }
 
 void AetherEngine::processFrame(uint8_t* pixels, int width, int height) {
+    debugInfo.frameCount++;
     BallInfo cue, target; bool foundCue = false, foundTarget = false;
     detectBalls(pixels, width, height, cue, target, foundCue, foundTarget);
+
+    debugInfo.foundCue = foundCue;
+    debugInfo.foundTarget = foundTarget;
+    debugInfo.cueX = foundCue ? cue.x : 0;
+    debugInfo.cueY = foundCue ? cue.y : 0;
+    debugInfo.targetX = foundTarget ? target.x : 0;
+    debugInfo.targetY = foundTarget ? target.y : 0;
+
     if (foundCue && foundTarget) {
         float minDist = 999999.0f; int bestPocket = -1;
         for (int i = 0; i < 6; ++i) {
@@ -53,7 +68,10 @@ void AetherEngine::processFrame(uint8_t* pixels, int width, int height) {
             float dist = std::sqrt(dx * dx + dy * dy);
             if (dist < minDist) { minDist = dist; bestPocket = i; }
         }
+        debugInfo.bestPocket = bestPocket;
         if (bestPocket != -1) calculateGhostBallShot(cue.x, cue.y, target.x, target.y, pockets[bestPocket].x, pockets[bestPocket].y);
+    } else {
+        debugInfo.bestPocket = -1;
     }
 }
 
@@ -62,3 +80,5 @@ AetherCommand AetherEngine::getLatestCommand() {
     currentCommand.hasShot.store(false);
     return copy;
 }
+
+DebugInfo AetherEngine::getDebugInfo() { return debugInfo; }

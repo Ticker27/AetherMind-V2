@@ -1,4 +1,5 @@
 package com.aethermind.core
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -34,29 +35,30 @@ class AetherForegroundService : Service() {
     private var imageReader: ImageReader? = null
     private var windowManager: WindowManager? = null
     private var panelView: android.view.View? = null
-    private var statusText: TextView? = null
+    private var debugTextView: TextView? = null
     private var botSwitch: Switch? = null
     private var execJob: Job? = null
+    private var debugJob: Job? = null
+
     private var screenWidth = 1080
     private var screenHeight = 1920
     private var pixelBuffer: ByteBuffer? = null
     private var isProcessing = false
     private var isBotActive = true
     private var useShizuku = false
+    private var frameCount = 0
+    private var lastFrameCount = 0
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        showControlPanel()
-        ShizukuActionExecutor.isAvailable() // request Shizuku permission if not yet granted
-        useShizuku = ShizukuActionExecutor.isGranted()
-        if (useShizuku) updateStatus("⚡ AETHER: SHIZUKU READY", Color.CYAN)
+        showDebugPanel()
+        useShizuku = ShizukuActionExecutor.isAvailable()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, createNotification())
         if (intent != null && intent.hasExtra("RESULT_CODE") && projection == null) {
-            // Read REAL screen resolution from the Intent (dynamic — no hardcode)
             screenWidth = intent.getIntExtra("WIDTH", 1080)
             screenHeight = intent.getIntExtra("HEIGHT", 1920)
             pixelBuffer = ByteBuffer.allocateDirect(screenWidth * screenHeight * 4)
@@ -66,7 +68,7 @@ class AetherForegroundService : Service() {
                 AetherNativeBridge.initEngine(screenWidth, screenHeight)
                 startScreenCapture(resultCode, data)
                 startExecutionLoop()
-                if (!useShizuku) updateStatus("⚡ AETHER: SCANNING...", Color.GREEN)
+                startDebugLoop()
             }
         }
         return START_STICKY
@@ -92,6 +94,7 @@ class AetherForegroundService : Service() {
                     }
                     pixelBuffer?.rewind()
                     AetherNativeBridge.processScreenFrame(pixelBuffer!!, screenWidth, screenHeight)
+                    frameCount++
                 } catch (e: Exception) { Log.e("AetherFG", "Capture Error", e) } finally { image.close(); isProcessing = false }
             }, null)
         } catch (e: Exception) { Log.e("AetherFG", "ScreenCapture Failed", e) }
@@ -103,17 +106,14 @@ class AetherForegroundService : Service() {
             while (isActive) {
                 try {
                     if (isBotActive) {
+                        useShizuku = ShizukuActionExecutor.isGranted()
                         val cmd = AetherNativeBridge.checkForShotCommand()
                         if (cmd != null) {
-                            useShizuku = ShizukuActionExecutor.isGranted()
-                            updateStatus("🎯 AETHER: SHOOTING!", Color.YELLOW)
                             if (useShizuku) {
                                 ShizukuActionExecutor.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt())
-                                updateStatus("⚡ AETHER: SHIZUKU READY", Color.CYAN)
                             } else {
                                 val accService = AetherAccessibilityService.instance
                                 if (accService != null) withContext(Dispatchers.Main) { accService.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt()) }
-                                updateStatus("⚡ AETHER: SCANNING...", Color.GREEN)
                             }
                             delay(4000)
                         }
@@ -124,17 +124,90 @@ class AetherForegroundService : Service() {
         }
     }
 
-    private fun showControlPanel() {
+    // ลูปแสดง Debug Info แบบ Real-time (อัปเดตทุก 500ms)
+    private fun startDebugLoop() {
+        debugJob?.cancel()
+        debugJob = scope.launch {
+            while (isActive) {
+                try {
+                    val dbg = AetherNativeBridge.getDebugInfo()
+                    val fps = (frameCount - lastFrameCount) * 2 // ทุก 500ms = x2 for per second
+                    lastFrameCount = frameCount
+
+                    val statusText = buildString {
+                        appendLine("═══ AETHER DEBUG ═══")
+                        appendLine("Mode: ${if (useShizuku) "SHIZUKU" else "ACCESSIBILITY"}")
+                        appendLine("Screen: ${screenWidth}x${screenHeight}")
+                        appendLine("Capture FPS: $fps")
+                        appendLine("Frames: $frameCount")
+                        appendLine("Bot: ${if (isBotActive) "ON" else "OFF"}")
+                        appendLine("─────────────────")
+                        if (dbg != null) {
+                            appendLine("Cue Ball: ${if (dbg[0] == 1f) "FOUND (${dbg[2].toInt()},${dbg[3].toInt()})" else "NOT FOUND"}")
+                            appendLine("Target:   ${if (dbg[1] == 1f) "FOUND (${dbg[4].toInt()},${dbg[5].toInt()})" else "NOT FOUND"}")
+                            appendLine("Pocket:   ${if (dbg[6] >= 0) "#${dbg[6].toInt()}" else "N/A"}")
+                            appendLine("─────────────────")
+                            if (dbg[0] != 1f) appendLine("⚠️ NO CUE BALL DETECTED")
+                            else if (dbg[1] != 1f) appendLine("⚠️ NO TARGET DETECTED")
+                            else appendLine("✅ READY TO SHOOT")
+                        }
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        debugTextView?.text = statusText
+                    }
+                } catch (e: Exception) { Log.e("AetherFG", "Debug Error", e) }
+                delay(500)
+            }
+        }
+    }
+
+    private fun showDebugPanel() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(0xCC000000.toInt()); setPadding(20, 10, 20, 10) }
-        statusText = TextView(this).apply { text = "⚡ AETHER: IDLE"; setTextColor(Color.GREEN); textSize = 12f; typeface = Typeface.DEFAULT_BOLD; layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
-        botSwitch = Switch(this).apply { isChecked = true; setOnCheckedChangeListener { _, isChecked -> isBotActive = isChecked; if (isChecked) updateStatus("⚡ AETHER: SCANNING...", Color.GREEN) else updateStatus("⛔ AETHER: PAUSED", Color.RED) } }
-        layout.addView(statusText); layout.addView(botSwitch)
-        val params = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = 50 }
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xDD000000.toInt())
+            setPadding(15, 10, 15, 10)
+        }
+
+        debugTextView = TextView(this).apply {
+            text = "═══ AETHER DEBUG ═══\nStarting..."
+            setTextColor(Color.GREEN)
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            textAlignment = android.widget.TextView.TEXT_ALIGNMENT_TEXT_START
+        }
+
+        val switchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 5, 0, 0)
+        }
+        val switchLabel = TextView(this).apply {
+            text = "BOT: "
+            setTextColor(Color.WHITE); textSize = 11f; typeface = Typeface.DEFAULT_BOLD
+        }
+        botSwitch = Switch(this).apply {
+            isChecked = true
+            setOnCheckedChangeListener { _, isChecked -> isBotActive = isChecked }
+        }
+        switchRow.addView(switchLabel)
+        switchRow.addView(botSwitch)
+
+        layout.addView(debugTextView)
+        layout.addView(switchRow)
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 5; y = 5 }
+
         try { windowManager?.addView(layout, params); panelView = layout } catch (e: Exception) {}
     }
 
-    private fun updateStatus(text: String, color: Int) { scope.launch(Dispatchers.Main) { statusText?.text = text; statusText?.setTextColor(color) } }
     private fun createNotification(): Notification { return NotificationCompat.Builder(this, "aether_channel").setContentTitle("AetherMind V2").setContentText("Bot is running...").setSmallIcon(android.R.drawable.ic_menu_camera).setOngoing(true).build() }
     private fun createNotificationChannel() { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { val channel = NotificationChannel("aether_channel", "Aether Service", NotificationManager.IMPORTANCE_LOW); getSystemService(NotificationManager::class.java).createNotificationChannel(channel) } }
     override fun onDestroy() { super.onDestroy(); scope.cancel(); virtualDisplay?.release(); imageReader?.close(); projection?.stop(); try { windowManager?.removeView(panelView) } catch (e: Exception) {} }
