@@ -37,9 +37,9 @@ class AetherForegroundService : Service() {
     private var statusText: TextView? = null
     private var botSwitch: Switch? = null
     private var execJob: Job? = null
-    private val screenWidth = 1080
-    private val screenHeight = 1920
-    private val pixelBuffer = ByteBuffer.allocateDirect(screenWidth * screenHeight * 4)
+    private var screenWidth = 1080
+    private var screenHeight = 1920
+    private var pixelBuffer: ByteBuffer? = null
     private var isProcessing = false
     private var isBotActive = true
     private var useShizuku = false
@@ -56,9 +56,13 @@ class AetherForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, createNotification())
         if (intent != null && intent.hasExtra("RESULT_CODE") && projection == null) {
+            // Read REAL screen resolution from the Intent (dynamic — no hardcode)
+            screenWidth = intent.getIntExtra("WIDTH", 1080)
+            screenHeight = intent.getIntExtra("HEIGHT", 1920)
+            pixelBuffer = ByteBuffer.allocateDirect(screenWidth * screenHeight * 4)
             val resultCode = intent.getIntExtra("RESULT_CODE", 0)
             val data = intent.getParcelableExtra<Intent>("DATA")
-            if (data != null) {
+            if (data != null && pixelBuffer != null) {
                 AetherNativeBridge.initEngine(screenWidth, screenHeight)
                 startScreenCapture(resultCode, data)
                 startExecutionLoop()
@@ -82,12 +86,12 @@ class AetherForegroundService : Service() {
                     val plane = image.planes[0]; val buffer = plane.buffer; val rowStride = plane.rowStride; val rowSize = screenWidth * 4
                     var pos = 0; val tempRow = ByteArray(rowSize)
                     while (pos < screenHeight * rowSize && buffer.remaining() >= rowStride) {
-                        buffer.get(tempRow, 0, rowSize); pixelBuffer.put(tempRow)
+                        buffer.get(tempRow, 0, rowSize); pixelBuffer?.put(tempRow)
                         if (rowStride > rowSize) buffer.position(buffer.position() + (rowStride - rowSize))
                         pos += rowSize
                     }
-                    pixelBuffer.rewind()
-                    AetherNativeBridge.processScreenFrame(pixelBuffer, screenWidth, screenHeight)
+                    pixelBuffer?.rewind()
+                    AetherNativeBridge.processScreenFrame(pixelBuffer!!, screenWidth, screenHeight)
                 } catch (e: Exception) { Log.e("AetherFG", "Capture Error", e) } finally { image.close(); isProcessing = false }
             }, null)
         } catch (e: Exception) { Log.e("AetherFG", "ScreenCapture Failed", e) }

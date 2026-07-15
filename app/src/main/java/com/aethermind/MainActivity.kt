@@ -1,4 +1,5 @@
 package com.aethermind
+
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -6,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.DisplayMetrics
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,11 +23,25 @@ import com.aethermind.core.AetherForegroundService
 
 class MainActivity : ComponentActivity() {
     companion object { const val TARGET_PACKAGE = "com.miniclip.eightballpool" }
+
     private val screenCaptureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val serviceIntent = Intent(this, AetherForegroundService::class.java).apply { putExtra("RESULT_CODE", result.resultCode); putExtra("DATA", result.data) }
+            // 1. อ่านความละเอียดหน้าจอจริงของเครื่อง
+            val metrics = DisplayMetrics()
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+            val screenWidth = metrics.widthPixels
+            val screenHeight = metrics.heightPixels
+
+            // 2. ส่งความละเอียดไปกับ Service
+            val serviceIntent = Intent(this, AetherForegroundService::class.java).apply {
+                putExtra("RESULT_CODE", result.resultCode)
+                putExtra("DATA", result.data)
+                putExtra("WIDTH", screenWidth)
+                putExtra("HEIGHT", screenHeight)
+            }
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(serviceIntent) else startService(serviceIntent)
-            Toast.makeText(this, "บอทเริ่มทำงาน! กำลังเปิดเกม...", Toast.LENGTH_SHORT).show()
+
+            Toast.makeText(this, "บอทเริ่มทำงาน (${screenWidth}x${screenHeight})! กำลังเปิดเกม...", Toast.LENGTH_SHORT).show()
             Thread { Thread.sleep(1000); launchGame() }.start()
         }
     }
