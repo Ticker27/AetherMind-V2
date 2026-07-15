@@ -7,10 +7,23 @@ import android.view.accessibility.AccessibilityEvent
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AetherAccessibilityService : AccessibilityService() {
-    companion object { var instance: AetherAccessibilityService? = null }
+    companion object {
+        var instance: AetherAccessibilityService? = null
+        @Volatile var currentPackageName: String = ""
+    }
     private val isExecuting = AtomicBoolean(false)
 
     override fun onServiceConnected() { super.onServiceConnected(); instance = this; Log.d("AetherBot", "Accessibility Connected!") }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg.isBlank()) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> currentPackageName = pkg
+        }
+    }
     fun executeSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Int) {
         if (!isExecuting.compareAndSet(false, true)) return
         try {

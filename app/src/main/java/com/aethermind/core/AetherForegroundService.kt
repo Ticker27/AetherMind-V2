@@ -59,6 +59,9 @@ class AetherForegroundService : Service() {
     private var panelParams: WindowManager.LayoutParams? = null
     private var panelVisible = true
     private var dStartX = 0f; private var dStartY = 0f; private var dInitX = 0; private var dInitY = 0; private var dDownTime = 0L
+    private var toggleBtnView: android.view.View? = null
+    private var toggleBtnParams: WindowManager.LayoutParams? = null
+    private var lastTargetState: Boolean? = null
 
     // --- สถานะ + TTS ---
     private var captureStatus = "INIT"
@@ -99,6 +102,7 @@ class AetherForegroundService : Service() {
             isBotActive = !isBotActive
             speak(if (isBotActive) "เปิดบอท" else "ปิดบอท")
             updateNotification(if (isBotActive) "Bot running — tap to pause" else "Bot paused — tap to resume")
+            updateToggleButton()
             return START_STICKY
         }
         if (intent != null && intent.hasExtra("RESULT_CODE")) {
@@ -151,8 +155,24 @@ class AetherForegroundService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START; x = 130; y = 300 }
-        positionPanelNearIcon()
+
+        // ปุ่มสวิทช์ BOT ON/OFF (แตะได้)
+        toggleBtnView = TextView(this).apply {
+            text = "⏸ BOT: ON"; textSize = 12f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            setPadding(20, 10, 20, 10)
+            val gd = GradientDrawable(); gd.shape = GradientDrawable.RECTANGLE; gd.cornerRadius = 14f; gd.setColor(0xFF1565C0.toInt())
+            background = gd
+        }
+        toggleBtnParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 0; y = 410 }
+        toggleBtnView?.setOnClickListener { toggleBot() }
+
         if (panelVisible) windowManager?.addView(panelView, panelParams)
+        windowManager?.addView(toggleBtnView, toggleBtnParams)
+        positionPanelNearIcon()
     }
 
     private val iconTouchListener = View.OnTouchListener { _v, event ->
@@ -182,6 +202,9 @@ class AetherForegroundService : Service() {
             panelParams?.x = p.x + 120
             panelParams?.y = p.y
             if (panelView != null && panelView!!.isAttachedToWindow) windowManager?.updateViewLayout(panelView, panelParams)
+            toggleBtnParams?.x = p.x
+            toggleBtnParams?.y = p.y + 110
+            if (toggleBtnView != null && toggleBtnView!!.isAttachedToWindow) windowManager?.updateViewLayout(toggleBtnView, toggleBtnParams)
         }
     }
 
@@ -196,6 +219,19 @@ class AetherForegroundService : Service() {
     }
 
     private fun togglePanel() { setPanelVisible(!panelVisible); speak(if (panelVisible) "แสดงเมนู" else "ซ่อนเมนู") }
+
+    private fun toggleBot() {
+        isBotActive = !isBotActive
+        updateToggleButton()
+        speak(if (isBotActive) "เปิดบอท" else "ปิดบอท")
+        updateNotification(if (isBotActive) "Bot running — tap to pause" else "Bot paused — tap to resume")
+    }
+    private fun updateToggleButton() {
+        (toggleBtnView as? TextView)?.let { tv ->
+            tv.text = if (isBotActive) "⏸ BOT: ON" else "▶ BOT: OFF"
+            (tv.background as? GradientDrawable)?.setColor((if (isBotActive) 0xFF1565C0 else 0xFF6A1B1A).toInt())
+        }
+    }
 
     private fun restartCapture(resultCode: Int, data: Intent) {
         stopCaptureInternal()
@@ -271,7 +307,8 @@ class AetherForegroundService : Service() {
         execJob = scope.launch {
             while (isActive) {
                 try {
-                    if (isBotActive) {
+                    // ห้ามยิงนอกเกม — ป้องกันมั่วทุกแอพ + ดึง notification shade ลงมา
+                    if (isBotActive && ForegroundAppDetector.isTargetForeground(this@AetherForegroundService)) {
                         useShizuku = ShizukuActionExecutor.isGranted()
                         val cmd = AetherNativeBridge.checkForShotCommand()
                         if (cmd != null) {
@@ -295,17 +332,25 @@ class AetherForegroundService : Service() {
         debugJob = scope.launch {
             while (isActive) {
                 try {
+                    useShizuku = ShizukuActionExecutor.isGranted()
                     val dbg = AetherNativeBridge.getDebugInfo()
                     val fps = (frameCount - lastFrameCount) * 2
                     lastFrameCount = frameCount
                     if (fps > 0) noFrameStreak = 0 else noFrameStreak++
+
+                    val fgPkg = ForegroundAppDetector.getForegroundPackage(this@AetherForegroundService)
+                    val isGame = fgPkg == ForegroundAppDetector.TARGET_PACKAGE
+                    if (lastTargetState != isGame) {
+                        lastTargetState = isGame
+                        if (isBotActive) speak(if (isGame) "เข้าเกม พร้อมยิง" else "ออกจากเกม หยุดยิง")
+                    }
 
                     if (isBotActive && captureStatus == "CAPTURING" && fps == 0 && noFrameStreak > 6) {
                         announceReConsent()
                     }
 
                     statusTick++
-                    if (statusTick % 20 == 0 && captureStatus == "CAPTURING") {
+                    if (statusTick % 20 == 0 && captureStatus == "CAPTURING" && isGame) {
                         if (fps > 0) speak("กำลังทำงาน เฟรม $fps") else speak("ไม่มีเฟรม")
                     }
 
@@ -317,6 +362,8 @@ class AetherForegroundService : Service() {
                         appendLine("Capture FPS: $fps")
                         appendLine("Frames: $frameCount")
                         appendLine("Bot: ${if (isBotActive) "ON" else "OFF"}")
+                        appendLine("App: ${if (fgPkg.isBlank()) "?" else fgPkg.takeLast(20)} ${if (isGame) "✅GAME" else "⛔OTHER"}")
+                        appendLine("Shoot: ${if (isBotActive && isGame) "ARMED" else "IDLE"}")
                         appendLine("─────────────────")
                         if (dbg != null) {
                             appendLine("Cue Ball: ${if (dbg[0] == 1f) "FOUND (${dbg[2].toInt()},${dbg[3].toInt()})" else "NOT FOUND"}")
@@ -367,6 +414,7 @@ class AetherForegroundService : Service() {
         stopCaptureInternal()
         try { windowManager?.removeView(iconView) } catch (e: Exception) { }
         try { windowManager?.removeView(panelView) } catch (e: Exception) { }
+        try { windowManager?.removeView(toggleBtnView) } catch (e: Exception) { }
         try { tts?.stop(); tts?.shutdown() } catch (e: Exception) { }
     }
 
