@@ -16,7 +16,15 @@ object ShizukuActionExecutor {
         if (!isAvailable()) { Log.e("Shizuku", "Cannot execute swipe"); return }
         try {
             val command = "input swipe ${startX.toInt()} ${startY.toInt()} ${endX.toInt()} ${endY.toInt()} $durationMs"
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+            // Shizuku.newProcess(String[], String[], String) is private in api:13.1.5; invoke via reflection.
+            val newProcessMethod = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            newProcessMethod.isAccessible = true
+            val process = newProcessMethod.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
             val errorReader = BufferedReader(InputStreamReader(process.errorStream))
             val error = errorReader.readText()
             process.waitFor()
