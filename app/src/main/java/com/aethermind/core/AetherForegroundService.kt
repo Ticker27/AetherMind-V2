@@ -48,7 +48,8 @@ class AetherForegroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         showControlPanel()
-        useShizuku = ShizukuActionExecutor.isAvailable()
+        ShizukuActionExecutor.isAvailable() // request Shizuku permission if not yet granted
+        useShizuku = ShizukuActionExecutor.isGranted()
         if (useShizuku) updateStatus("⚡ AETHER: SHIZUKU READY", Color.CYAN)
     }
 
@@ -100,15 +101,17 @@ class AetherForegroundService : Service() {
                     if (isBotActive) {
                         val cmd = AetherNativeBridge.checkForShotCommand()
                         if (cmd != null) {
+                            useShizuku = ShizukuActionExecutor.isGranted()
                             updateStatus("🎯 AETHER: SHOOTING!", Color.YELLOW)
                             if (useShizuku) {
                                 ShizukuActionExecutor.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt())
+                                updateStatus("⚡ AETHER: SHIZUKU READY", Color.CYAN)
                             } else {
                                 val accService = AetherAccessibilityService.instance
                                 if (accService != null) withContext(Dispatchers.Main) { accService.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt()) }
+                                updateStatus("⚡ AETHER: SCANNING...", Color.GREEN)
                             }
                             delay(4000)
-                            updateStatus(if (useShizuku) "⚡ AETHER: SHIZUKU READY" else "⚡ AETHER: SCANNING...", if (useShizuku) Color.CYAN else Color.GREEN)
                         }
                     }
                 } catch (e: Exception) { Log.e("AetherFG", "Exec Loop Error", e) }

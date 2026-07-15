@@ -12,8 +12,15 @@ object ShizukuActionExecutor {
         } catch (e: Exception) { Log.e("Shizuku", "Not running", e); false }
     }
 
+    /** Non-prompting check — safe to call every frame. */
+    fun isGranted(): Boolean {
+        return try {
+            Shizuku.pingBinder() && Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (e: Exception) { false }
+    }
+
     fun executeSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Int) {
-        if (!isAvailable()) { Log.e("Shizuku", "Cannot execute swipe"); return }
+        if (!isGranted()) { Log.e("Shizuku", "Cannot execute swipe"); return }
         try {
             val command = "input swipe ${startX.toInt()} ${startY.toInt()} ${endX.toInt()} ${endY.toInt()} $durationMs"
             // Shizuku.newProcess(String[], String[], String) is private in api:13.1.5; invoke via reflection.
