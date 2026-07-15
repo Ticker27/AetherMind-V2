@@ -43,10 +43,17 @@ void AetherEngine::calculateGhostBallShot(float cueX, float cueY, float targetX,
     float dxCG = ghostX - cueX, dyCG = ghostY - cueY;
     float distCG = std::sqrt(dxCG * dxCG + dyCG * dyCG); if (distCG == 0.0f) distCG = 1.0f;
     float cueDirX = dxCG / distCG, cueDirY = dyCG / distCG;
-    float swipeDist = 400.0f;
+
+    // Humanizer: พลังยิงแปรผันตามระยะทาง (ระยะไกล = แรงขึ้น)
+    float totalDist = distCG + distPT;
+    float power = 150.0f + (totalDist / 1000.0f) * 300.0f;
+    if (power > 500.0f) power = 500.0f;
+
     currentCommand.startX = cueX; currentCommand.startY = cueY;
-    currentCommand.endX = cueX - (cueDirX * swipeDist); currentCommand.endY = cueY - (cueDirY * swipeDist);
-    currentCommand.durationMs = 400; currentCommand.hasShot = true;
+    currentCommand.endX = cueX - (cueDirX * power);
+    currentCommand.endY = cueY - (cueDirY * power);
+    currentCommand.durationMs = 300 + (int)(power * 0.3f);
+    currentCommand.hasShot = true;
 }
 
 void AetherEngine::processFrame(uint8_t* pixels, int width, int height) {
