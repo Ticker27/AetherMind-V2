@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.hardware.display.DisplayManager
@@ -18,8 +19,12 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.aethermind.vision.AetherNativeBridge
@@ -33,17 +38,21 @@ class AetherForegroundService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var windowManager: WindowManager? = null
-    private var overlayView: TextView? = null
+    private var panelView: View? = null
+    private var statusText: TextView? = null
+    private var botSwitch: Switch? = null
     private var execJob: Job? = null
 
     private val screenWidth = 1080
     private val screenHeight = 1920
     private val pixelBuffer = ByteBuffer.allocateDirect(screenWidth * screenHeight * 4)
+    private var isProcessing = false
+    private var isBotActive = true // สถานะเปิด/ปิดบอท
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        showOverlayIndicator()
+        showControlPanel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,7 +66,7 @@ class AetherForegroundService : Service() {
                 AetherNativeBridge.initEngine(screenWidth, screenHeight)
                 startScreenCapture(resultCode, data)
                 startExecutionLoop()
-                updateOverlayStatus("⚡ AETHER: SCANNING...")
+                updateStatus("⚡ AETHER: SCANNING...", Color.GREEN)
             }
         }
         return START_STICKY
@@ -76,8 +85,10 @@ class AetherForegroundService : Service() {
             )
 
             imageReader?.setOnImageAvailableListener({ reader ->
+                if (isProcessing) return@setOnImageAvailableListener
                 val image = reader?.acquireLatestImage() ?: return@setOnImageAvailableListener
 
+                isProcessing = true
                 try {
                     val plane = image.planes[0]
                     val buffer = plane.buffer
@@ -97,6 +108,7 @@ class AetherForegroundService : Service() {
                     Log.e("AetherFG", "Capture Error", e)
                 } finally {
                     image.close()
+                    isProcessing = false
                 }
             }, null)
         } catch (e: Exception) {
@@ -109,53 +121,80 @@ class AetherForegroundService : Service() {
         execJob = scope.launch {
             while (isActive) {
                 try {
-                    val cmd = AetherNativeBridge.checkForShotCommand()
-                    if (cmd != null) {
-                        updateOverlayStatus("🎯 AETHER: SHOOTING!")
-                        val accService = AetherAccessibilityService.instance
-                        if (accService != null) {
-                            withContext(Dispatchers.Main) {
-                                accService.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt())
+                    if (isBotActive) {
+                        val cmd = AetherNativeBridge.checkForShotCommand()
+                        if (cmd != null) {
+                            updateStatus("🎯 AETHER: SHOOTING!", Color.YELLOW)
+                            val accService = AetherAccessibilityService.instance
+                            if (accService != null) {
+                                withContext(Dispatchers.Main) {
+                                    accService.executeSwipe(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5].toInt())
+                                }
+                                delay(4000)
+                                updateStatus("⚡ AETHER: SCANNING...", Color.GREEN)
                             }
-                            // รอ 4 วินาที เพื่อให้แน่ใจว่าระบบเสมือนจริงเสร็จสิ้นสมบูรณ์และป้องกันการสแปม
-                            delay(4000)
-                            updateOverlayStatus("⚡ AETHER: SCANNING...")
                         }
                     }
                 } catch (e: Exception) {
                     Log.e("AetherFG", "Exec Loop Error", e)
                 }
-                delay(100) // ลดการใช้ CPU ลง
+                delay(100)
             }
         }
     }
 
-    private fun showOverlayIndicator() {
+    private fun showControlPanel() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        overlayView = TextView(this).apply {
-            text = "⚡ AETHER: STARTING..."
-            setBackgroundColor(0x99000000.toInt())
-            setTextColor(0xFF00FF00.toInt())
-            textSize = 10f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(10, 5, 10, 5)
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(0xCC000000.toInt())
+            setPadding(20, 10, 20, 10)
         }
+
+        statusText = TextView(this).apply {
+            text = "⚡ AETHER: IDLE"
+            setTextColor(Color.GREEN)
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        botSwitch = Switch(this).apply {
+            isChecked = true
+            setOnCheckedChangeListener { _, isChecked ->
+                isBotActive = isChecked
+                if (isChecked) {
+                    updateStatus("⚡ AETHER: SCANNING...", Color.GREEN)
+                } else {
+                    updateStatus("⛔ AETHER: PAUSED", Color.RED)
+                }
+            }
+        }
+
+        layout.addView(statusText)
+        layout.addView(botSwitch)
+
         val params = WindowManager.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSPARENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 10
-            y = 10
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = 50
         }
-        try { windowManager?.addView(overlayView, params) } catch (e: Exception) {}
+
+        windowManager?.addView(layout, params)
+        panelView = layout
     }
 
-    private fun updateOverlayStatus(status: String) {
-        scope.launch(Dispatchers.Main) { overlayView?.text = status }
+    private fun updateStatus(text: String, color: Int) {
+        scope.launch(Dispatchers.Main) {
+            statusText?.text = text
+            statusText?.setTextColor(color)
+        }
     }
 
     private fun createNotification(): Notification {
@@ -163,7 +202,8 @@ class AetherForegroundService : Service() {
             .setContentTitle("AetherMind V2")
             .setContentText("Bot is running...")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setOngoing(true).build()
+            .setOngoing(true)
+            .build()
     }
 
     private fun createNotificationChannel() {
@@ -177,7 +217,7 @@ class AetherForegroundService : Service() {
         super.onDestroy()
         scope.cancel()
         virtualDisplay?.release(); imageReader?.close(); projection?.stop()
-        try { windowManager?.removeView(overlayView) } catch (e: Exception) {}
+        try { windowManager?.removeView(panelView) } catch (e: Exception) {}
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
