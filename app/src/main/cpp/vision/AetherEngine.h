@@ -4,41 +4,24 @@
 
 struct AetherCommand {
     std::atomic<bool> hasShot;
-    float startX;
-    float startY;
-    float endX;
-    float endY;
+    float startX, startY, endX, endY;
     int durationMs;
-
-    // std::atomic<> ไม่คัดลอกได้โดยอัตโนมัติ -> ต้องเขียน copy ctor เอง ไม่งั้น getLatestCommand() คอมไพล์พัง
-    AetherCommand()
-        : hasShot(false), startX(0), startY(0), endX(0), endY(0), durationMs(0) {}
-    AetherCommand(const AetherCommand& o)
-        : hasShot(o.hasShot.load()),
-          startX(o.startX), startY(o.startY), endX(o.endX), endY(o.endY), durationMs(o.durationMs) {}
 };
 
-struct BallInfo {
-    float x;
-    float y;
-    bool isCue;
-    bool isTarget;
-};
+struct BallInfo { float x, y; bool isCue, isTarget; };
+struct Pocket { float x, y; };
 
 class AetherEngine {
 private:
     uint8_t* binaryBuffer;
-    int screenWidth;
-    int screenHeight;
+    int screenWidth, screenHeight;
     AetherCommand currentCommand;
-
+    Pocket pockets[6];
     void detectBalls(uint8_t* pixels, int width, int height, BallInfo& outCue, BallInfo& outTarget, bool& foundCue, bool& foundTarget);
-    void calculateGhostBallShot(float cueX, float cueY, float targetX, float targetY);
-
+    void calculateGhostBallShot(float cueX, float cueY, float targetX, float targetY, float pocketX, float pocketY);
 public:
     AetherEngine(int width, int height);
     ~AetherEngine();
-
     void processFrame(uint8_t* screenPixels, int width, int height);
     AetherCommand getLatestCommand();
 };
