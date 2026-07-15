@@ -4,12 +4,14 @@ import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -20,10 +22,10 @@ import android.os.IBinder
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.Gravity
-import android.view.ViewGroup
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
-import android.widget.Switch
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.aethermind.vision.AetherNativeBridge
@@ -39,7 +41,6 @@ class AetherForegroundService : Service() {
     private var windowManager: WindowManager? = null
     private var panelView: android.view.View? = null
     private var debugTextView: TextView? = null
-    private var botSwitch: Switch? = null
     private var execJob: Job? = null
     private var debugJob: Job? = null
 
@@ -52,7 +53,14 @@ class AetherForegroundService : Service() {
     private var frameCount = 0
     private var lastFrameCount = 0
 
-    // --- สถานะ + TTS (ช่วงทดสอบ) ---
+    // --- Floating UI ---
+    private var iconView: android.view.View? = null
+    private var iconParams: WindowManager.LayoutParams? = null
+    private var panelParams: WindowManager.LayoutParams? = null
+    private var panelVisible = true
+    private var dStartX = 0f; private var dStartY = 0f; private var dInitX = 0; private var dInitY = 0; private var dDownTime = 0L
+
+    // --- สถานะ + TTS ---
     private var captureStatus = "INIT"
     private var tts: TextToSpeech? = null
     private var noFrameStreak = 0
@@ -71,7 +79,7 @@ class AetherForegroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         initTts()
-        showDebugPanel()
+        showFloatingControls()
         useShizuku = ShizukuActionExecutor.isAvailable()
     }
 
@@ -87,6 +95,12 @@ class AetherForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, createNotification())
+        if (intent?.getBooleanExtra("TOGGLE_BOT", false) == true) {
+            isBotActive = !isBotActive
+            speak(if (isBotActive) "เปิดบอท" else "ปิดบอท")
+            updateNotification(if (isBotActive) "Bot running — tap to pause" else "Bot paused — tap to resume")
+            return START_STICKY
+        }
         if (intent != null && intent.hasExtra("RESULT_CODE")) {
             screenWidth = intent.getIntExtra("WIDTH", 1080)
             screenHeight = intent.getIntExtra("HEIGHT", 1920)
@@ -103,6 +117,86 @@ class AetherForegroundService : Service() {
         return START_STICKY
     }
 
+    private fun showFloatingControls() {
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        // ไอคอนลอย (วงกลม)
+        iconView = TextView(this).apply {
+            text = "🎱"; textSize = 22f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            val gd = GradientDrawable(); gd.shape = GradientDrawable.OVAL; gd.setColor(0xFF1B5E20.toInt())
+            background = gd; setPadding(18, 18, 18, 18)
+        }
+        iconParams = WindowManager.LayoutParams(
+            100, 100, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 0; y = 300 }
+        iconView?.setOnTouchListener(iconTouchListener)
+        windowManager?.addView(iconView, iconParams)
+
+        // เมนูเดบัก (โปร่งแสง + ทะลุจอ)
+        debugTextView = TextView(this).apply {
+            text = "═══ AETHER DEBUG ═══\nStarting..."
+            setTextColor(Color.GREEN); textSize = 10f; typeface = Typeface.MONOSPACE
+            textAlignment = TextView.TEXT_ALIGNMENT_TEXT_START
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding(15, 10, 15, 10)
+            addView(debugTextView)
+        }
+        panelView = layout
+        panelParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 130; y = 300 }
+        positionPanelNearIcon()
+        if (panelVisible) windowManager?.addView(panelView, panelParams)
+    }
+
+    private val iconTouchListener = View.OnTouchListener { _v, event ->
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                dStartX = event.rawX; dStartY = event.rawY
+                dInitX = iconParams!!.x; dInitY = iconParams!!.y; dDownTime = System.currentTimeMillis()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                iconParams!!.x = dInitX + (event.rawX - dStartX).toInt()
+                iconParams!!.y = dInitY + (event.rawY - dStartY).toInt()
+                windowManager?.updateViewLayout(iconView, iconParams)
+                positionPanelNearIcon()
+            }
+            MotionEvent.ACTION_UP -> {
+                val dx = event.rawX - dStartX; val dy = event.rawY - dStartY
+                val dist = Math.hypot(dx.toDouble(), dy.toDouble())
+                if (dist < 10) togglePanel()
+                else if (dy > 80 && Math.abs(dy.toDouble()) > Math.abs(dx.toDouble())) { setPanelVisible(false); speak("ซ่อนเมนู") }
+            }
+        }
+        true
+    }
+
+    private fun positionPanelNearIcon() {
+        iconParams?.let { p ->
+            panelParams?.x = p.x + 120
+            panelParams?.y = p.y
+            if (panelView != null && panelView!!.isAttachedToWindow) windowManager?.updateViewLayout(panelView, panelParams)
+        }
+    }
+
+    private fun setPanelVisible(v: Boolean) {
+        panelVisible = v
+        if (v) {
+            if (panelView?.parent == null) windowManager?.addView(panelView, panelParams)
+            else windowManager?.updateViewLayout(panelView, panelParams)
+        } else {
+            if (panelView?.parent != null) windowManager?.removeView(panelView)
+        }
+    }
+
+    private fun togglePanel() { setPanelVisible(!panelVisible); speak(if (panelVisible) "แสดงเมนู" else "ซ่อนเมนู") }
+
     private fun restartCapture(resultCode: Int, data: Intent) {
         stopCaptureInternal()
         startScreenCapture(resultCode, data)
@@ -113,9 +207,7 @@ class AetherForegroundService : Service() {
         try { virtualDisplay?.release() } catch (e: Exception) { }
         try { imageReader?.close() } catch (e: Exception) { }
         try { projection?.stop() } catch (e: Exception) { }
-        virtualDisplay = null
-        imageReader = null
-        projection = null
+        virtualDisplay = null; imageReader = null; projection = null
     }
 
     private fun startScreenCapture(resultCode: Int, data: Intent) {
@@ -208,12 +300,10 @@ class AetherForegroundService : Service() {
                     lastFrameCount = frameCount
                     if (fps > 0) noFrameStreak = 0 else noFrameStreak++
 
-                    // Watchdog: capturING แต่ fps==0 เกิน ~3 วินาที -> ขอ re-consent
                     if (isBotActive && captureStatus == "CAPTURING" && fps == 0 && noFrameStreak > 6) {
                         announceReConsent()
                     }
 
-                    // Periodic TTS ทุก ~10 วินาที (20 ticks * 500ms) เฉพาะตอนกำลังจับภาพ
                     statusTick++
                     if (statusTick % 20 == 0 && captureStatus == "CAPTURING") {
                         if (fps > 0) speak("กำลังทำงาน เฟรม $fps") else speak("ไม่มีเฟรม")
@@ -238,68 +328,22 @@ class AetherForegroundService : Service() {
                             else appendLine("✅ READY TO SHOOT")
                         }
                     }
-
-                    withContext(Dispatchers.Main) {
-                        debugTextView?.text = statusText
-                    }
+                    withContext(Dispatchers.Main) { debugTextView?.text = statusText }
                 } catch (e: Exception) { Log.e("AetherFG", "Debug Error", e) }
                 delay(500)
             }
         }
     }
 
-    private fun showDebugPanel() {
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xDD000000.toInt())
-            setPadding(15, 10, 15, 10)
-        }
-
-        debugTextView = TextView(this).apply {
-            text = "═══ AETHER DEBUG ═══\nStarting..."
-            setTextColor(Color.GREEN)
-            textSize = 10f
-            typeface = Typeface.MONOSPACE
-            textAlignment = android.widget.TextView.TEXT_ALIGNMENT_TEXT_START
-        }
-
-        val switchRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 5, 0, 0)
-        }
-        val switchLabel = TextView(this).apply {
-            text = "BOT: "
-            setTextColor(Color.WHITE); textSize = 11f; typeface = Typeface.DEFAULT_BOLD
-        }
-        botSwitch = Switch(this).apply {
-            isChecked = true
-            setOnCheckedChangeListener { _, isChecked -> isBotActive = isChecked }
-        }
-        switchRow.addView(switchLabel)
-        switchRow.addView(botSwitch)
-
-        layout.addView(debugTextView)
-        layout.addView(switchRow)
-
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START; x = 5; y = 5 }
-
-        try { windowManager?.addView(layout, params); panelView = layout } catch (e: Exception) {}
-    }
-
-    private fun createNotification(content: String = "Bot is running..."): Notification {
+    private fun createNotification(content: String = "Bot running — tap to pause/resume"): Notification {
+        val toggleIntent = Intent(this, AetherForegroundService::class.java).putExtra("TOGGLE_BOT", true)
+        val pi = PendingIntent.getService(this, 0, toggleIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "aether_channel")
             .setContentTitle("AetherMind V2")
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
+            .setContentIntent(pi)
             .build()
     }
 
@@ -321,6 +365,7 @@ class AetherForegroundService : Service() {
         super.onDestroy()
         scope.cancel()
         stopCaptureInternal()
+        try { windowManager?.removeView(iconView) } catch (e: Exception) { }
         try { windowManager?.removeView(panelView) } catch (e: Exception) { }
         try { tts?.stop(); tts?.shutdown() } catch (e: Exception) { }
     }
