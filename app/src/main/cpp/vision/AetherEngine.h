@@ -18,18 +18,21 @@ struct AetherCommand {
           startX(o.startX), startY(o.startY), endX(o.endX), endY(o.endY), durationMs(o.durationMs) {}
 };
 
+struct BallInfo {
+    float x;
+    float y;
+    bool isCue;
+    bool isTarget;
+};
+
 class AetherEngine {
 private:
     uint8_t* binaryBuffer;
-    uint8_t* objVis;      // visited map สำหรับ flood-fill หาลูกเป้า
-    int* objStackX;
-    int* objStackY;
     int screenWidth;
     int screenHeight;
     AetherCommand currentCommand;
 
-    void detectBalls(uint8_t* pixels, int width, int height, float& outCueX, float& outCueY, bool& foundCue);
-    void findObjectBall(uint8_t* pixels, int width, int height, float cueX, float cueY, float& outObjX, float& outObjY, bool& foundObj);
+    void detectBalls(uint8_t* pixels, int width, int height, BallInfo& outCue, BallInfo& outTarget, bool& foundCue, bool& foundTarget);
     void calculateGhostBallShot(float cueX, float cueY, float targetX, float targetY);
 
 public:
