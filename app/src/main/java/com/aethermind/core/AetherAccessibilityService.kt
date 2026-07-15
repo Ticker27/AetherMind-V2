@@ -38,7 +38,6 @@ class AetherAccessibilityService : AccessibilityService() {
             }, null)
         } catch (e: Exception) { isExecuting.set(false) }
     }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
-    override fun onDestroy() { super.onDestroy(); instance = null }
+    override fun onDestroy() { super.onDestroy(); instance = null; currentPackageName = "" }
 }
