@@ -6,6 +6,11 @@ struct AetherCommand {
     std::atomic<bool> hasShot;
     float startX, startY, endX, endY;
     int durationMs;
+    AetherCommand()
+        : hasShot(false), startX(0), startY(0), endX(0), endY(0), durationMs(0) {}
+    AetherCommand(const AetherCommand& o)
+        : hasShot(o.hasShot.load()),
+          startX(o.startX), startY(o.startY), endX(o.endX), endY(o.endY), durationMs(o.durationMs) {}
 };
 
 struct BallInfo { float x, y; bool isCue, isTarget; };

@@ -57,4 +57,8 @@ void AetherEngine::processFrame(uint8_t* pixels, int width, int height) {
     }
 }
 
-AetherCommand AetherEngine::getLatestCommand() { return currentCommand; }
+AetherCommand AetherEngine::getLatestCommand() {
+    AetherCommand copy = currentCommand;
+    currentCommand.hasShot.store(false);
+    return copy;
+}
